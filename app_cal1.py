@@ -212,30 +212,20 @@ def parse_calendar(calendar_url):
 def get_deadline_info(deadlines):
     """Get information about upcoming deadlines"""
     if not deadlines:
-        return "No deadline information available. Please upload a calendar."
+        return "No upcoming deadlines found."
+
+    info_lines = []
+    for deadline in deadlines:
+        name = deadline.get('name', 'Unnamed Event')
+        date = deadline.get('date')
+        description = deadline.get('description', 'No description')
+        
+        date_str = date.strftime("%A, %B %d, %Y at %I:%M %p") if date.time() != datetime.min.time() else date.strftime("%A, %B %d, %Y")
+        
+        info = f"🗓️ **{name}**\n📅 Date: {date_str}\n📝 Description: {description}\n"
+        info_lines.append(info)
     
-    now = datetime.now()
-    upcoming = [d for d in deadlines if d['date'] > now]
-    
-    if not upcoming:
-        return "There are no upcoming deadlines in your calendar."
-    
-    # Get the next deadline
-    next_deadline = upcoming[0]
-    days_remaining = (next_deadline['date'] - now).days
-    
-    response = f"Your next deadline is: {next_deadline['name']}\n"
-    response += f"Due on: {next_deadline['date'].strftime('%A, %B %d, %Y at %H:%M')}\n"
-    response += f"Time remaining: {days_remaining} days\n"
-    response += f"Description: {next_deadline['description']}\n\n"
-    
-    if len(upcoming) > 1:
-        response += "Upcoming deadlines:\n"
-        for i, deadline in enumerate(upcoming[1:4], start=2):  # Show 3 more deadlines
-            days = (deadline['date'] - now).days
-            response += f"{i}. {deadline['name']} - {deadline['date'].strftime('%B %d')} ({days} days remaining)\n"
-    
-    return response
+    return "\n---\n".join(info_lines)
 
 def create_deadline_donut_chart(deadlines):
     """Create a donut chart of the 5 earliest deadlines showing days remaining"""
