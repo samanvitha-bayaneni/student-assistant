@@ -1,6 +1,6 @@
 # Student RAG Assistant
 
-<img width="454" alt="Screenshot 2025-04-15 at 1 27 09 PM" src="https://github.com/user-attachments/assets/ed855b0e-f4b2-4948-8ba4-9e9e500bfe4a" />
+<center><img width="454" alt="Screenshot 2025-04-15 at 1 27 09 PM" src="https://github.com/user-attachments/assets/ed855b0e-f4b2-4948-8ba4-9e9e500bfe4a" /></center>
 
 
 **Demo link:** https://drive.google.com/file/d/1ymP4tyjb2HVOG8zGjyOu-fBYotxVD0Jn/view?usp=sharing
