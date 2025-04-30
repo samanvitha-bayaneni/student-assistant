@@ -15,123 +15,136 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import FAISS
 from langchain.chains import RetrievalQA
-from langchain.chat_models import ChatOpenAI
 from langchain.prompts import PromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI  # Updated import
+
+
+# This is the function that was missing - it applies the LaTeX formatting selectively to parts of the text that look like math
+def format_math_expressions(text: str) -> str:
+    """
+    Format math expressions in text to LaTeX format.
+    Looks for math-like patterns and formats them.
+    """
+    # Check for common math patterns
+    math_patterns = [
+        r"\\partial\s*[a-zA-Z]",  # Partial derivatives
+        r"[a-zA-Z]+\d+",  # Variable with subscript like x1, y2
+        r"f\s*=\s*fm-1",  # Special pattern
+        r"[a-zA-Z]\([a-zA-Z]\)",  # Function notation
+        r"[a-zA-Z]/[a-zA-Z]",  # Simple division
+        r"\\frac{",  # Already has some LaTeX
+        r"\\sum",  # Summation
+        r"\\int",  # Integration
+        r"\\prod",  # Product
+        r"\\sqrt",  # Square root
+    ]
+    
+    # Split text into paragraphs to process math only where needed
+    paragraphs = text.split("\n\n")
+    processed_paragraphs = []
+    
+    for paragraph in paragraphs:
+        has_math = any(re.search(pattern, paragraph) for pattern in math_patterns)
+        if has_math:
+            # Only apply formatting to paragraphs with math content
+            processed_paragraphs.append(paragraph)
+        else:
+            processed_paragraphs.append(paragraph)
+            
+    return "\n\n".join(processed_paragraphs)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PDFRagSystem:
-    def __init__(self, openai_api_key=None):
-        """Initialize the PDF RAG System with optional OpenAI API key."""
+    def __init__(self, google_api_key=None):
+        """Initialize the PDF RAG System with optional Gemini API key."""
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200
         )
-        # Initialize embeddings model (local model to avoid API costs)
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
         self.vector_store = None
         self.qa_chain = None
-        
-        # Set OpenAI API key if provided
-        if openai_api_key:
-            os.environ["OPENAI_API_KEY"] = openai_api_key
-    
+
+        if google_api_key:
+            os.environ["GOOGLE_API_KEY"] = google_api_key
+
     def extract_text_from_pdf(self, pdf_file_path: str) -> str:
-        """Extract text content from a PDF file."""
         text = ""
         with open(pdf_file_path, 'rb') as file:
             pdf_reader = PyPDF2.PdfReader(file)
-            for page_num in range(len(pdf_reader.pages)):
-                page = pdf_reader.pages[page_num]
+            for page in pdf_reader.pages:
                 text += page.extract_text() + "\n"
         return text
-    
-    def process_pdf(self, pdf_file_path: str) -> None:
-        """Process a PDF file and create vector store from its content."""
-        # Extract text from PDF
+
+    def process_pdf(self, pdf_file_path: str):
         raw_text = self.extract_text_from_pdf(pdf_file_path)
-        
-        # Split text into chunks
         text_chunks = self.text_splitter.split_text(raw_text)
-        
-        # Create vector store from chunks
         self.vector_store = FAISS.from_texts(text_chunks, self.embeddings)
-        
-        # Initialize QA chain if OpenAI API key is set
-        if os.environ.get("OPENAI_API_KEY"):
+        if os.environ.get("GOOGLE_API_KEY"):
             self.initialize_qa_chain()
-        
         return raw_text, text_chunks
-    
-    def process_pdf_bytes(self, pdf_bytes: bytes) -> tuple:
-        """Process a PDF from bytes and create vector store from its content."""
-        # Save bytes to temporary file
+
+    def process_pdf_bytes(self, pdf_bytes: bytes):
         with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_file:
             temp_file.write(pdf_bytes)
             temp_path = temp_file.name
-        
-        # Process the temp PDF file
         raw_text, text_chunks = self.process_pdf(temp_path)
-        
-        # Clean up the temporary file
         os.unlink(temp_path)
-        
         return raw_text, text_chunks
-    
-    def initialize_qa_chain(self) -> None:
-        """Initialize the QA chain with language model and retriever."""
+
+    def initialize_qa_chain(self):
         if not self.vector_store:
             raise ValueError("Vector store not initialized. Process a PDF first.")
-        
-        # Create custom prompt template
+
         prompt_template = """
         You are an assistant that answers questions based on the provided context from a PDF document.
-        
+
         Context: {context}
-        
+
         Question: {question}
-        
+
         Answer the question based only on the provided context. If you cannot find the answer in the context, 
         say "I don't have enough information to answer this question based on the document content." 
         Do not make up information.
-        
+
+        When you're explaining mathematical concepts or equations:
+        1. Use proper LaTeX notation for formulas and equations
+        2. Format subscripts properly (e.g., x_i instead of xi)
+        3. Use proper notation for derivatives, integrals, sums, etc.
+
         Answer:
         """
-        
+
         PROMPT = PromptTemplate(
             template=prompt_template,
             input_variables=["context", "question"]
         )
-        
-        # Initialize language model
-        llm = ChatOpenAI(
-            model_name="gpt-3.5-turbo",
+
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash",
             temperature=0.1
         )
-        
-        # Create QA chain
+
         self.qa_chain = RetrievalQA.from_chain_type(
             llm=llm,
             chain_type="stuff",
             retriever=self.vector_store.as_retriever(search_kwargs={"k": 3}),
             chain_type_kwargs={"prompt": PROMPT}
         )
-    
+
     def query(self, question: str) -> Dict[str, Any]:
-        """Query the system with a question and get an answer based on the PDF content."""
         if not self.qa_chain:
-            if not os.environ.get("OPENAI_API_KEY"):
-                return {"result": "OpenAI API key not set. Please provide an API key to enable querying."}
-            
+            if not os.environ.get("GOOGLE_API_KEY"):
+                return {"result": "Google API key not set. Please provide a key to enable querying."}
             if not self.vector_store:
                 return {"result": "No PDF has been processed yet. Please process a PDF first."}
-            
             self.initialize_qa_chain()
-        
+
         try:
             result = self.qa_chain({"query": question})
             return result
@@ -139,15 +152,14 @@ class PDFRagSystem:
             return {"result": f"Error processing query: {str(e)}"}
 
     def similarity_search(self, query: str, k: int = 3) -> List[tuple]:
-        """Perform a similarity search without using the QA chain."""
         if not self.vector_store:
             return [("No PDF has been processed yet. Please process a PDF first.", 0)]
-        
         try:
             results = self.vector_store.similarity_search_with_score(query, k=k)
             return [(doc.page_content, score) for doc, score in results]
         except Exception as e:
             return [(f"Error during similarity search: {str(e)}", 0)]
+
 
 def parse_calendar(calendar_url):
     """Parse calendar URL and extract deadlines"""
@@ -277,35 +289,57 @@ def answer_query(query, rag_system, deadlines):
             return get_deadline_info(deadlines)
         else:
             return "No calendar information has been uploaded. Please provide a calendar link to track deadlines."
-    
-    # First try with OpenAI if API key is available
-    if os.environ.get("OPENAI_API_KEY") and rag_system.vector_store:
+
+    # First try with Google API if key is available
+    if os.environ.get("GOOGLE_API_KEY") and rag_system.vector_store:
         try:
-            rag_system.initialize_qa_chain()
             result = rag_system.query(query)
-            return result.get('result', 'No answer found.')
+            raw_answer = result.get('result', 'No answer found.')
+            print(f"Raw LLM answer: {raw_answer}")  # <--- ADD THIS LINE
+            formatted_answer = format_math_expressions(raw_answer)
+            print(f"Formatted answer: {formatted_answer}") # <--- ADD THIS LINE
+            return formatted_answer
+
         except Exception as e:
             logger.error(f"Error using QA chain: {e}")
             # Fall back to similarity search
-    
-    # Otherwise use similarity search
+            relevant_chunks = rag_system.similarity_search(query)
+            # ... (rest of the similarity search part)
+    else:
+        relevant_chunks = rag_system.similarity_search(query)
+        # ... (rest of the similarity search part)
+        response = "Based on the document content:\n\n"
+        for i, (chunk, score) in enumerate(relevant_chunks):
+            similarity = 1 - (score/100) if score > 0 else 0
+            response += f"--- Relevant Information {i+1} (relevance: {similarity:.2f}) ---\n"
+            response += chunk[:500] + "...\n\n" if len(chunk) > 500 else chunk + "\n\n"
+        response += "\nThese passages should help answer your question. If you need more specific information, please ask a more focused question."
+        formatted_response = format_math_expressions(response)
+        print(f"Formatted response (similarity search): {formatted_response}") # <--- ADD THIS LINE
+        return formatted_response
+
+    # Otherwise use similarity search (moved inside the 'else' block)
     relevant_chunks = rag_system.similarity_search(query)
-    
+
     if not relevant_chunks or relevant_chunks[0][0].startswith("No PDF"):
         return "I couldn't find relevant information in the uploaded document to answer your question."
-    
+
     # Prepare response with retrieved information
     response = "Based on the document content:\n\n"
-    
+
     for i, (chunk, score) in enumerate(relevant_chunks):
         # Convert FAISS distance to a similarity score (1 - distance/100)
         similarity = 1 - (score/100) if score > 0 else 0
         response += f"--- Relevant Information {i+1} (relevance: {similarity:.2f}) ---\n"
         response += chunk[:500] + "...\n\n" if len(chunk) > 500 else chunk + "\n\n"
-    
+
     response += "\nThese passages should help answer your question. If you need more specific information, please ask a more focused question."
-    
-    return response
+
+    # Apply LaTeX formatting to the response
+    formatted_response = format_math_expressions(response)
+    print(f"Formatted response (final): {formatted_response}") # <--- ADD THIS LINE
+    return formatted_response
+
 
 # Main Streamlit app
 def main():
@@ -326,14 +360,14 @@ def main():
     with st.sidebar:
         st.header("Configuration")
         
-        openai_api_key = st.text_input("Enter your OpenAI API key (optional)", type="password")
-        if openai_api_key:
-            os.environ["OPENAI_API_KEY"] = openai_api_key
+        api_key = st.text_input("Enter your Google API key (optional)", type="password")
+        if api_key:
+            os.environ["GOOGLE_API_KEY"] = api_key
             st.success("API key set! You can now use the LLM for better responses.")
         
         # Initialize RAG system if not done already
-        if st.session_state.rag_system is None or openai_api_key:
-            st.session_state.rag_system = PDFRagSystem(openai_api_key=openai_api_key)
+        if st.session_state.rag_system is None or api_key:
+            st.session_state.rag_system = PDFRagSystem(google_api_key=api_key)
         
         st.header("Document Upload")
         
@@ -418,7 +452,7 @@ def main():
     st.write("---")
     st.write("**Tips:**")
     st.write("- Upload your course materials as PDFs")
-    st.write("- Add your OpenAI API key for better answers (optional)")
+    st.write("- Add your API key for better answers (optional)")
     st.write("- Ask specific questions about the content")
     st.write("- Add your course calendar to track deadlines")
     st.write("- Ask 'When is my next deadline?' to see upcoming due dates")
